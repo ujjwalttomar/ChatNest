@@ -1,6 +1,8 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import crypto from "crypto"
 import User from "../models/user.js";
+import sendEmail from "../utils/sendEmail.js"
 
 // Helper: sign JWT and send as cookie + response
 const sendToken = (res, user, statusCode) => {
@@ -12,7 +14,7 @@ const sendToken = (res, user, statusCode) => {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "strict",
-        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+        maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
     return res.status(statusCode).json({
@@ -158,32 +160,76 @@ export const updatePassword = async (req, res, next) => {
 // POST /api/auth/forgot-password
 export const forgotPassword = async (req, res, next) => {
     try {
-        const { email } = req.body;
-        if (!email) return res.status(400).json({ message: "Email is required." });
+        const { email } = req.body
+        if (!email) return res.status(400).json({ message: "Email is required." })
 
-        const user = await User.findOne({ email });
-        // Always return 200 to prevent email enumeration
+        const user = await User.findOne({ email })
+        // dont tell them if the user exists or not - security thing
         if (!user) {
-            return res.status(200).json({ message: "If that email exists, a reset link has been sent." });
+            return res.status(200).json({ message: "If that email exists, a reset link has been sent." })
         }
 
-        // TODO: Integrate an email service (e.g. Nodemailer / SendGrid) to send a real reset link.
-        // For now, we just acknowledge the request.
-        return res.status(200).json({ message: "If that email exists, a reset link has been sent." });
+        // generate random token
+        const rawToken = crypto.randomBytes(32).toString("hex")
+        // hash it before saving (dont store raw token in db)
+        const hashed = crypto.createHash("sha256").update(rawToken).digest("hex")
+
+        user.passwordResetToken = hashed
+        user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000) // 1 hour
+        await user.save()
+
+        const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`
+
+        const html = `
+            <h2>Password Reset</h2>
+            <p>You requested a password reset. Click the link below to reset your password.</p>
+            <a href="${resetUrl}">Reset Password</a>
+            <p>This link expires in 1 hour.</p>
+            <p>If you didn't request this, ignore this email.</p>
+        `
+
+        await sendEmail(user.email, "ChatNest - Password Reset", html)
+
+        return res.status(200).json({ message: "If that email exists, a reset link has been sent." })
     } catch (error) {
-        next(error);
+        next(error)
     }
-};
+}
 
 // POST /api/auth/reset-password
 export const resetPassword = async (req, res, next) => {
     try {
-        // TODO: Implement token-based password reset once an email service is integrated.
-        return res.status(501).json({ message: "Reset password via email is not yet implemented." });
+        const { token, newPassword } = req.body
+
+        if (!token || !newPassword) {
+            return res.status(400).json({ message: "Token and new password are required." })
+        }
+        if (newPassword.length < 8) {
+            return res.status(400).json({ message: "Password must be at least 8 characters." })
+        }
+
+        // hash the token coming from frontend and match with db
+        const hashed = crypto.createHash("sha256").update(token).digest("hex")
+
+        const user = await User.findOne({
+            passwordResetToken: hashed,
+            passwordResetExpires: { $gt: new Date() }
+        })
+
+        if (!user) {
+            return res.status(400).json({ message: "Invalid or expired reset token." })
+        }
+
+        user.password = await bcrypt.hash(newPassword, 12)
+        user.passwordResetToken = undefined
+        user.passwordResetExpires = undefined
+        await user.save()
+
+        return res.status(200).json({ message: "Password reset successful. You can now login." })
     } catch (error) {
-        next(error);
+        next(error)
     }
-};
+}
 
 // DELETE /api/auth/account
 export const deleteAccount = async (req, res, next) => {

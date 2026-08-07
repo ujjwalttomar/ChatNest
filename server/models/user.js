@@ -21,6 +21,20 @@ const userSchema = new mongoose.Schema({
     avatar :{
         type : String,
         default : ''
+    },
+    isOnline : {
+        type : Boolean,
+        default : false
+    },
+    lastSeen : {
+        type : Date
+    },
+    // for password reset
+    passwordResetToken : {
+        type : String
+    },
+    passwordResetExpires : {
+        type : Date
     }
 },{timestamps: true});
 
