@@ -228,6 +228,11 @@ export const deleteMessage = async (req, res, next) => {
             if (message.sender.toString() !== userId.toString()) {
                 return res.status(403).json({ message: "Only the sender can delete for everyone." });
             }
+            // can only delete for everyone within 1 hour of sending
+            const oneHour = 60 * 60 * 1000
+            if (Date.now() - new Date(message.createdAt).getTime() > oneHour) {
+                return res.status(403).json({ message: "Can only delete for everyone within 1 hour of sending." })
+            }
             message.deleted = true;
             message.deletedAt = new Date();
             message.text = "";
