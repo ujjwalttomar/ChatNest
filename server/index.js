@@ -3,7 +3,10 @@ import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import cookieParser from "cookie-parser";
+import cors from "cors"
 import connectDB from "./config/db.js";
+import User from "./models/user.js"
+import Message from "./models/message.js"
 
 // Route imports
 import authRoutes from "./routes/auth.js";
@@ -14,61 +17,121 @@ import groupRoutes from "./routes/group.js";
 const app = express();
 const httpServer = createServer(app);
 
-// ─── Socket.io Setup ─────────────────────────────────────────────────────────
 const io = new Server(httpServer, {
     cors: {
-        origin: process.env.CLIENT_URL || "http://localhost:3000",
+        origin: process.env.CLIENT_URL || "http://localhost:5173",
         credentials: true,
     },
 });
 
-// Track online users:  userId → socketId
-const onlineUsers = new Map();
+// userId -> socketId
+const onlineUsers = new Map()
 
 io.on("connection", (socket) => {
-    console.log(`🔌 Socket connected: ${socket.id}`);
+    console.log("socket connected", socket.id)
 
-    // Client sends their userId after connecting
-    socket.on("user:online", (userId) => {
-        onlineUsers.set(userId, socket.id);
-        io.emit("users:online", Array.from(onlineUsers.keys()));
-    });
+    // user comes online
+    socket.on("user:online", async (userId) => {
+        onlineUsers.set(userId, socket.id)
 
-    // Join a room (conversation or group)
+        try {
+            await User.findByIdAndUpdate(userId, { isOnline: true })
+        } catch (e) {
+            console.log("error updating online status", e)
+        }
+
+        // tell everyone this user is now online
+        io.emit("users:online", Array.from(onlineUsers.keys()))
+    })
+
+    // join a room (conversationId or groupId)
     socket.on("room:join", (roomId) => {
-        socket.join(roomId);
-    });
+        socket.join(roomId)
+        console.log(socket.id, "joined room", roomId)
+    })
 
-    // Client sends a new direct/group message → broadcast to room
+    socket.on("room:leave", (roomId) => {
+        socket.leave(roomId)
+    })
+
+    // new message sent via socket - broadcast to room
     socket.on("message:send", (data) => {
         // data: { roomId, message }
-        socket.to(data.roomId).emit("message:receive", data.message);
-    });
+        socket.to(data.roomId).emit("message:receive", data.message)
+    })
 
-    // Typing indicators
+    // receiver got the message - mark as delivered
+    socket.on("message:delivered", async ({ messageId, senderId }) => {
+        try {
+            await Message.findByIdAndUpdate(messageId, { status: "delivered" })
+            // tell the sender their message was delivered
+            const senderSocket = onlineUsers.get(senderId)
+            if (senderSocket) {
+                io.to(senderSocket).emit("message:delivered", { messageId })
+            }
+        } catch (e) {
+            console.log("error marking delivered", e)
+        }
+    })
+
+    // receiver read the message - mark as read
+    socket.on("message:read", async ({ messageId, senderId }) => {
+        try {
+            await Message.findByIdAndUpdate(messageId, { status: "read" })
+            // send read receipt back to the original sender only
+            const senderSocket = onlineUsers.get(senderId)
+            if (senderSocket) {
+                io.to(senderSocket).emit("message:read", { messageId })
+            }
+        } catch (e) {
+            console.log("error marking read", e)
+        }
+    })
+
+    // typing
     socket.on("typing:start", ({ roomId, username }) => {
-        socket.to(roomId).emit("typing:start", { username });
-    });
-    socket.on("typing:stop", ({ roomId }) => {
-        socket.to(roomId).emit("typing:stop");
-    });
+        socket.to(roomId).emit("typing:start", { username })
+    })
 
-    socket.on("disconnect", () => {
+    socket.on("typing:stop", ({ roomId }) => {
+        socket.to(roomId).emit("typing:stop")
+    })
+
+    socket.on("disconnect", async () => {
+        let disconnectedUserId = null
+
         for (const [userId, sid] of onlineUsers.entries()) {
             if (sid === socket.id) {
-                onlineUsers.delete(userId);
-                break;
+                disconnectedUserId = userId
+                onlineUsers.delete(userId)
+                break
             }
         }
-        io.emit("users:online", Array.from(onlineUsers.keys()));
-        console.log(`🔌 Socket disconnected: ${socket.id}`);
-    });
-});
+
+        if (disconnectedUserId) {
+            try {
+                await User.findByIdAndUpdate(disconnectedUserId, {
+                    isOnline: false,
+                    lastSeen: new Date()
+                })
+            } catch (e) {
+                console.log("error updating offline status", e)
+            }
+        }
+
+        io.emit("users:online", Array.from(onlineUsers.keys()))
+        console.log("socket disconnected", socket.id)
+    })
+})
 
 // ─── Express Middleware ───────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(cors({
+    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    credentials: true
+}))
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 app.use("/api/auth", authRoutes);
@@ -76,23 +139,21 @@ app.use("/api", messageRoutes);
 app.use("/api", conversationRoutes);
 app.use("/api", groupRoutes);
 
-// Health check
-app.get("/", (req, res) => res.json({ status: "chatNest API is running 🚀" }));
+app.get("/", (req, res) => res.json({ status: "chatNest API is running" }));
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-    console.error("❌ Error:", err.message);
+    console.error("Error:", err.message);
     const status = err.status || err.statusCode || 500;
     res.status(status).json({
         message: err.message || "Internal server error.",
     });
 });
 
-// ─── Start Server ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
     httpServer.listen(PORT, () => {
-        console.log(`🚀 Server running on http://localhost:${PORT}`);
+        console.log(`Server running on port ${PORT}`);
     });
 });
