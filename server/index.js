@@ -13,6 +13,8 @@ import authRoutes from "./routes/auth.js";
 import messageRoutes from "./routes/message.js";
 import conversationRoutes from "./routes/conversation.js";
 import groupRoutes from "./routes/group.js";
+import userRoutes from "./routes/user.js";
+
 
 const app = express();
 const httpServer = createServer(app);
@@ -138,6 +140,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", messageRoutes);
 app.use("/api", conversationRoutes);
 app.use("/api", groupRoutes);
+app.use("/api", userRoutes);
 
 app.get("/", (req, res) => res.json({ status: "chatNest API is running" }));
 
