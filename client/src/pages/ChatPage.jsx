@@ -5,10 +5,28 @@ import { useSocket } from '../context/SocketContext'
 import ChatWindow from '../components/ChatWindow'
 import { useNavigate } from 'react-router-dom'
 
+// derive display name and other participant id from a conversation
+function getConvMeta(conv, currentUserId) {
+    if (conv.type === 'group') {
+        return {
+            name: conv.group?.name || 'Group',
+            avatar: conv.group?.avatar || '',
+            otherId: null
+        }
+    }
+    const other = conv.participants?.find(p => p._id !== currentUserId)
+    return {
+        name: other?.username || 'Unknown',
+        avatar: other?.avatar || '',
+        otherId: other?._id || null
+    }
+}
+
 function ConvItem({ conv, active, onlineUsers, onClick, currentUserId }) {
-    const isOnline = conv.type === 'direct' && onlineUsers.includes(
-        conv.participants?.find(p => p !== currentUserId)
-    )
+    const { name, otherId } = getConvMeta(conv, currentUserId)
+    const isOnline = conv.type === 'direct' && onlineUsers.includes(otherId)
+    const preview = conv.lastMessage?.text || 'No messages yet'
+
     return (
         <button
             onClick={onClick}
@@ -16,7 +34,7 @@ function ConvItem({ conv, active, onlineUsers, onClick, currentUserId }) {
         >
             <div className="relative shrink-0">
                 <div className="w-10 h-10 bg-[#2d2d3d] rounded-full flex items-center justify-center text-sm font-semibold text-white">
-                    {conv.name?.[0]?.toUpperCase() || '?'}
+                    {name[0]?.toUpperCase() || '?'}
                 </div>
                 {isOnline && (
                     <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-400 rounded-full border-2 border-[#0f0f13]" />
@@ -24,14 +42,14 @@ function ConvItem({ conv, active, onlineUsers, onClick, currentUserId }) {
             </div>
             <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
-                    <span className="text-white text-sm font-medium truncate">{conv.name}</span>
+                    <span className="text-white text-sm font-medium truncate">{name}</span>
                     {conv.unreadCount > 0 && (
                         <span className="bg-violet-600 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center shrink-0">
                             {conv.unreadCount}
                         </span>
                     )}
                 </div>
-                <p className="text-slate-500 text-xs truncate">{conv.lastMessagePreview || 'No messages yet'}</p>
+                <p className="text-slate-500 text-xs truncate">{preview}</p>
             </div>
         </button>
     )
@@ -73,26 +91,28 @@ export default function ChatPage() {
         }
     }
 
-    const startDM = async (targetUser) => {
-        // check if conv already exists
+    const startDM = (targetUser) => {
+        // check if already in list
         const existing = conversations.find(c =>
-            c.type === 'direct' && c.participants?.includes(targetUser._id)
+            c.type === 'direct' &&
+            c.participants?.some(p => p._id === targetUser._id)
         )
         if (existing) {
             setSelected(existing)
-            setShowSearch(false)
-            return
+        } else {
+            // create a temporary conversation object for new DM
+            setSelected({
+                type: 'direct',
+                participants: [
+                    { _id: user._id, username: user.username },
+                    { _id: targetUser._id, username: targetUser.username }
+                ],
+                _id: null
+            })
         }
-        // create by sending a message (backend creates conv lazily)
-        setSelected({
-            type: 'direct',
-            name: targetUser.username,
-            participants: [user._id, targetUser._id],
-            _new: true,
-            _targetId: targetUser._id
-        })
         setShowSearch(false)
         setSearchQuery('')
+        setSearchResults([])
     }
 
     const handleLogout = async () => {
@@ -100,28 +120,28 @@ export default function ChatPage() {
         navigate('/')
     }
 
+    const { name: selectedName, otherId } = selected
+        ? getConvMeta(selected, user._id)
+        : { name: '', otherId: null }
+
     const roomId = selected
         ? selected.type === 'direct'
-            ? [user._id, selected.participants?.find(p => p !== user._id)].sort().join('-')
-            : selected.group
+            ? [user._id, otherId].sort().join('-')
+            : selected.group?._id
         : null
 
     return (
         <div className="h-screen flex bg-[#0f0f13] overflow-hidden">
             {/* Sidebar */}
             <aside className="w-72 flex flex-col bg-[#13131a] border-r border-[#2d2d3d] shrink-0">
-                {/* header */}
                 <div className="p-4 flex items-center justify-between border-b border-[#2d2d3d]">
                     <div className="flex items-center gap-2">
                         <div className="w-7 h-7 bg-violet-600 rounded-lg flex items-center justify-center text-white text-xs font-bold">C</div>
                         <span className="text-white font-semibold text-sm">ChatNest</span>
                     </div>
-                    <button onClick={handleLogout} className="text-slate-500 hover:text-white text-xs transition-colors">
-                        logout
-                    </button>
+                    <button onClick={handleLogout} className="text-slate-500 hover:text-white text-xs transition-colors">logout</button>
                 </div>
 
-                {/* user info */}
                 <div className="px-4 py-3 flex items-center gap-2 border-b border-[#2d2d3d]">
                     <div className="w-8 h-8 bg-violet-700 rounded-full flex items-center justify-center text-xs font-bold text-white">
                         {user?.username?.[0]?.toUpperCase()}
@@ -133,17 +153,17 @@ export default function ChatPage() {
                 </div>
 
                 {/* search */}
-                <div className="p-3 border-b border-[#2d2d3d]">
+                <div className="p-3 border-b border-[#2d2d3d] relative">
                     <input
                         placeholder="Search users..."
                         value={searchQuery}
                         onChange={handleSearch}
                         onFocus={() => setShowSearch(true)}
-                        onBlur={() => setTimeout(() => setShowSearch(false), 200)}
+                        onBlur={() => setTimeout(() => setShowSearch(false), 150)}
                         className="w-full bg-[#0f0f13] border border-[#2d2d3d] rounded-xl px-3 py-2 text-white text-xs outline-none focus:border-violet-500 transition-colors"
                     />
                     {showSearch && searchResults.length > 0 && (
-                        <div className="absolute z-10 mt-1 w-60 bg-[#1a1a24] border border-[#2d2d3d] rounded-xl overflow-hidden shadow-xl">
+                        <div className="absolute left-3 right-3 z-10 mt-1 bg-[#1a1a24] border border-[#2d2d3d] rounded-xl overflow-hidden shadow-xl">
                             {searchResults.map(u => (
                                 <button
                                     key={u._id}
@@ -153,17 +173,19 @@ export default function ChatPage() {
                                     <div className="w-6 h-6 bg-violet-700 rounded-full flex items-center justify-center text-[10px] font-bold">
                                         {u.username[0].toUpperCase()}
                                     </div>
-                                    {u.username}
+                                    <div>
+                                        <p className="text-sm">{u.username}</p>
+                                        {u.isOnline && <p className="text-[10px] text-green-400">online</p>}
+                                    </div>
                                 </button>
                             ))}
                         </div>
                     )}
                 </div>
 
-                {/* conversations list */}
                 <div className="flex-1 overflow-y-auto p-2">
                     {conversations.length === 0 ? (
-                        <p className="text-slate-600 text-xs text-center py-6">No conversations yet.<br />Search for a user to start chatting.</p>
+                        <p className="text-slate-600 text-xs text-center py-6">No conversations yet.<br />Search for a user to start.</p>
                     ) : (
                         conversations.map(conv => (
                             <ConvItem
@@ -183,23 +205,20 @@ export default function ChatPage() {
             <div className="flex-1 flex flex-col overflow-hidden">
                 {selected ? (
                     <>
-                        {/* chat header */}
                         <div className="h-14 border-b border-[#2d2d3d] flex items-center px-5 gap-3 shrink-0">
                             <div className="w-8 h-8 bg-[#2d2d3d] rounded-full flex items-center justify-center text-sm font-bold text-white">
-                                {selected.name?.[0]?.toUpperCase() || '?'}
+                                {selectedName?.[0]?.toUpperCase() || '?'}
                             </div>
                             <div>
-                                <p className="text-white text-sm font-medium">{selected.name}</p>
+                                <p className="text-white text-sm font-medium">{selectedName}</p>
                                 <p className="text-slate-500 text-xs">
-                                    {selected.type === 'direct' && onlineUsers.includes(selected.participants?.find(p => p !== user._id))
-                                        ? 'online'
-                                        : selected.type === 'direct' ? 'offline' : `${selected.memberCount || ''} members`
-                                    }
+                                    {selected.type === 'direct'
+                                        ? onlineUsers.includes(otherId) ? 'online' : 'offline'
+                                        : 'group'}
                                 </p>
                             </div>
                         </div>
-
-                        <ChatWindow conversation={selected} roomId={roomId} />
+                        <ChatWindow conversation={selected} roomId={roomId} currentUserId={user._id} />
                     </>
                 ) : (
                     <div className="flex-1 flex items-center justify-center">

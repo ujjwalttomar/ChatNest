@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import { SocketProvider } from './context/SocketContext'
 import LoginPage from './pages/LoginPage'
 import ChatPage from './pages/ChatPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 
 function PrivateRoute({ children }) {
     const { user, loading } = useAuth()
@@ -20,6 +21,7 @@ function AppRoutes() {
     return (
         <Routes>
             <Route path="/" element={<PublicRoute><LoginPage /></PublicRoute>} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/chat" element={
                 <PrivateRoute>
                     <SocketProvider>

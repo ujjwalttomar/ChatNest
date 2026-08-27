@@ -27,7 +27,10 @@ export default function ChatWindow({ conversation, roomId }) {
     const typingTimer = useRef(null)
 
     const isDirect = conversation?.type === 'direct'
-    const contactId = isDirect ? conversation?.participants?.find(p => p !== user._id) : null
+    // participants are populated objects {_id, username, avatar} not raw ids
+    const contactId = isDirect
+        ? (conversation?.participants?.find(p => p._id !== user._id)?._id || null)
+        : null
 
     // load messages
     useEffect(() => {
